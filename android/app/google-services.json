@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "341621942000",
+    "project_id": "rdlive-1b1de",
+    "storage_bucket": "rdlive-1b1de.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:341621942000:android:b325332ff504adc5290435",
+        "android_client_info": {
+          "package_name": "com.rdlive.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD0GYQK8vbcPfHswIj1LYzhxDSjdtfaVpI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
