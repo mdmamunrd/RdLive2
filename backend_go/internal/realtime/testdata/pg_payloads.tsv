@@ -1,0 +1,28 @@
+room_events	{"data": {}, "type": "members_changed", "room_id": 1}
+room_events	{"data": {}, "type": "members_changed", "room_id": 2}
+room_events	{"data": {}, "type": "requests_changed", "room_id": 1}
+room_events	{"data": {}, "type": "seats_changed", "room_id": 1}
+room_events	{"data": {}, "type": "requests_changed", "room_id": 1}
+room_events	{"data": {}, "type": "seats_changed", "room_id": 1}
+room_events	{"data": {}, "type": "members_changed", "room_id": 1}
+room_events	{"data": {}, "type": "seats_changed", "room_id": 1}
+room_events	{"data": {"gift_id": 1, "quantity": 2, "sender_id": 3, "gift_tx_id": 1, "coins_spent": 20, "receiver_id": 1, "diamonds_earned": 14, "receiver_today_diamonds": 14}, "type": "gift", "room_id": 1}
+room_events	{"data": {"battle_id": 1}, "type": "pk_created", "room_id": 1}
+room_events	{"data": {"battle_id": 1}, "type": "pk_created", "room_id": 2}
+room_events	{"data": {}, "type": "members_changed", "room_id": 2}
+room_events	{"data": {"battle_id": 1}, "type": "pk_started", "room_id": 1}
+room_events	{"data": {"battle_id": 1}, "type": "pk_started", "room_id": 2}
+room_events	{"data": {"side": "a", "points": 10, "score_a": 10, "score_b": 0, "battle_id": 1, "sender_id": 3}, "type": "pk_score", "room_id": 1}
+room_events	{"data": {"side": "a", "points": 10, "score_a": 10, "score_b": 0, "battle_id": 1, "sender_id": 3}, "type": "pk_score", "room_id": 2}
+room_events	{"data": {"gift_id": 1, "quantity": 1, "sender_id": 3, "gift_tx_id": 2, "coins_spent": 10, "receiver_id": 1, "diamonds_earned": 7, "receiver_today_diamonds": 21}, "type": "gift", "room_id": 1}
+room_events	{"data": {"banned": false, "user_id": 4}, "type": "kicked", "room_id": 1}
+room_events	{"data": {}, "type": "members_changed", "room_id": 1}
+room_events	{"data": {}, "type": "seats_changed", "room_id": 1}
+room_events	{"data": {"user_id": 3}, "type": "left", "room_id": 1}
+room_events	{"data": {}, "type": "members_changed", "room_id": 1}
+room_events	{"data": {}, "type": "seats_changed", "room_id": 1}
+chat_events	{"type": "message", "users": [3, 4], "message_id": 1, "conversation_id": 1}
+chat_events	{"type": "read", "users": [3], "reader_id": 4, "conversation_id": 1, "up_to_message_id": 1}
+room_events	{"data": {"winner": "a", "is_draw": false, "score_a": 10, "score_b": 0, "battle_id": 1}, "type": "pk_finished", "room_id": 1}
+room_events	{"data": {"winner": "a", "is_draw": false, "score_a": 10, "score_b": 0, "battle_id": 1}, "type": "pk_finished", "room_id": 2}
+room_events	{"data": {}, "type": "room_ended", "room_id": 1}

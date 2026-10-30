@@ -1,0 +1,13 @@
+	<!-- ===== rdlive permissions (inside the top-level <dict> of ios/Runner/Info.plist) ===== -->
+	<key>NSCameraUsageDescription</key>
+	<string>rdlive uses the camera so you can go live with video and take photos for chat.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>rdlive uses the microphone so you can speak in live rooms and PK battles.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>rdlive needs your photos so you can send pictures in chat and choose a profile photo.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>rdlive can save pictures you receive to your photo library.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>

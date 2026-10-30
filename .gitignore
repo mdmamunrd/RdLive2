@@ -1,0 +1,6 @@
+.env
+*.log
+frontend_flutter/.dart_tool/
+frontend_flutter/build/
+frontend_flutter/.flutter-plugins*
+backend_go/bin/
