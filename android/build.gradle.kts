@@ -14,19 +14,37 @@ subprojects {
 }
 
 subprojects {
-    project.evaluationDependsOn(":app")
+    plugins.withId("com.android.library") {
+        (extensions.findByName("android")
+            as? com.android.build.gradle.BaseExtension)
+            ?.compileSdkVersion(35)
+    }
+
+    plugins.withId("com.android.application") {
+        (extensions.findByName("android")
+            as? com.android.build.gradle.BaseExtension)
+            ?.compileSdkVersion(35)
+    }
 }
 
-// ✅ afterEvaluate এর বদলে plugins.withId ব্যবহার করা হয়েছে
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+val newBuildDir: Directory =
+    rootProject.layout.buildDirectory.dir("../../build").get()
+rootProject.layout.buildDirectory.value(newBuildDir)
+
 subprojects {
-    plugins.withId("com.android.library") {
-        (extensions.findByName("android") as? com.android.build.gradle.BaseExtension)
-            ?.compileSdkVersion(35)
-    }
-    plugins.withId("com.android.application") {
-        (extensions.findByName("android") as? com.android.build.gradle.BaseExtension)
-            ?.compileSdkVersion(35)
-    }
+    val newSubprojectBuildDir = newBuildDir.dir(project.name)
+    project.layout.buildDirectory.value(newSubprojectBuildDir)
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {
