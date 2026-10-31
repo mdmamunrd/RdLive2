@@ -17,12 +17,15 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
-// ✅ এই ব্লকটি agora_rtc_engine এবং অন্যান্য প্লাগিনের compileSdk সমস্যা সমাধান করে
+// ✅ afterEvaluate এর বদলে plugins.withId ব্যবহার করা হয়েছে
 subprojects {
-    afterEvaluate {
-        extensions.findByType<com.android.build.gradle.BaseExtension>()?.apply {
-            compileSdkVersion(35)
-        }
+    plugins.withId("com.android.library") {
+        (extensions.findByName("android") as? com.android.build.gradle.BaseExtension)
+            ?.compileSdkVersion(35)
+    }
+    plugins.withId("com.android.application") {
+        (extensions.findByName("android") as? com.android.build.gradle.BaseExtension)
+            ?.compileSdkVersion(35)
     }
 }
 
