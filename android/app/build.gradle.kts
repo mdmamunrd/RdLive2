@@ -16,7 +16,6 @@ android {
     namespace = "com.rdlive.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
-    compileSdk = 34
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -26,12 +25,9 @@ android {
     defaultConfig {
         applicationId = "com.rdlive.app"
         minSdk = 23
-        targetSdk = 34
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
     }
 
     signingConfigs {
@@ -54,8 +50,4 @@ android {
             }
         }
     }
-}
-
-flutter {
-    source = "../.."
 }
