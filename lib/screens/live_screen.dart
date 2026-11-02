@@ -1,92 +1,65 @@
-import 'package:flutter/material.dart';
-import '../services/agora_service.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-class LiveScreen extends StatefulWidget {
-  const LiveScreen({Key? key}) : super(key: key);
+class AgoraService {
+  static const String appId = "0cdec08a1d1a490a8a3a61ea431476c3";
 
-  @override
-  State<LiveScreen> createState() => _LiveScreenState();
-}
+  RtcEngine? _engine;
+  bool _isInitialized = false;
 
-class _LiveScreenState extends State<LiveScreen> {
-  final AgoraService _agoraService = AgoraService();
-  final TextEditingController _channelController = TextEditingController();
-  bool _isInChannel = false;
+  Future<void> initAgora() async {
+    if (_isInitialized) return;
 
-  @override
-  void dispose() {
-    _channelController.dispose();
-    _agoraService.leaveChannel();
-    super.dispose();
+    await [Permission.microphone, Permission.camera].request();
+
+    final engine = createAgoraRtcEngine();
+    await engine.initialize(const RtcEngineContext(
+      appId: appId,
+      channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
+    ));
+
+    _engine = engine;
+    _isInitialized = true;
   }
 
-  Future<void> _joinLive() async {
-    if (_channelController.text.isEmpty) return;
+  Future<void> joinChannel({
+    required String channelName,
+    required int uid,
+    required bool isBroadcaster,
+    String token = "",
+  }) async {
+    await initAgora();
+    final engine = _engine!;
 
-    try {
-      await _agoraService.joinChannel(
-        channelName: _channelController.text.trim(),
-        uid: 0,
-        isBroadcaster: true,
-      );
-      setState(() {
-        _isInChannel = true;
-      });
-    } catch (e) {
-      debugPrint("Error joining channel: $e");
+    await engine.enableAudio();
+    if (isBroadcaster) {
+      await engine.enableVideo();
+      await engine.startPreview();
     }
-  }
 
-  Future<void> _leaveLive() async {
-    try {
-      await _agoraService.leaveChannel();
-      setState(() {
-        _isInChannel = false;
-      });
-    } catch (e) {
-      debugPrint("Error leaving channel: $e");
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("RdLive Streaming"),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (!_isInChannel) ...[
-              TextField(
-                controller: _channelController,
-                decoration: const InputDecoration(
-                  labelText: "Enter Channel Name",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: _joinLive,
-                child: const Text("Start Live"),
-              ),
-            ] else ...[
-              const Text(
-                "You are live in the channel!",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: _leaveLive,
-                child: const Text("Leave Live"),
-              ),
-            ],
-          ],
-        ),
+    await engine.joinChannel(
+      token: token,
+      channelId: channelName,
+      uid: uid,
+      options: ChannelMediaOptions(
+        channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
+        clientRoleType: isBroadcaster
+            ? ClientRoleType.clientRoleBroadcaster
+            : ClientRoleType.clientRoleAudience,
+        publishMicrophoneTrack: isBroadcaster,
+        publishCameraTrack: isBroadcaster,
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: true,
       ),
     );
+  }
+
+  Future<void> leaveChannel() async {
+    final engine = _engine;
+    if (engine == null) return;
+    await engine.leaveChannel();
+    await engine.release();
+    _engine = null;
+    _isInitialized = false;
   }
 }
