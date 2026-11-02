@@ -2,10 +2,9 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class AgoraService {
-  static const String appId = "0cdec08a1d1a490a8a3a61ea431476c3"; 
-  static const String appCertificate = "53283547e62f402b9ef67ad653ad7a4d";
+  static const String appId = "0cdec08a1d1a490a8a3a61ea431476c3";
 
-  late RtcEngine _engine;
+  RtcEngine? _engine;
   bool _isInitialized = false;
 
   Future<void> initAgora() async {
@@ -13,12 +12,13 @@ class AgoraService {
 
     await [Permission.microphone, Permission.camera].request();
 
-    _engine = createAgoraRtcEngine();
-    await _engine.initialize(const RtcEngineContext(
+    final engine = createAgoraRtcEngine();
+    await engine.initialize(const RtcEngineContext(
       appId: appId,
       channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
     ));
 
+    _engine = engine;
     _isInitialized = true;
   }
 
@@ -26,32 +26,40 @@ class AgoraService {
     required String channelName,
     required int uid,
     required bool isBroadcaster,
+    String token = "",
   }) async {
     await initAgora();
+    final engine = _engine!;
 
-    await _engine.setClientRole(
-      role: isBroadcaster 
-          ? ClientRoleType.clientRoleBroadcaster 
-          : ClientRoleType.clientRoleAudience,
-    );
+    await engine.enableAudio();
+    if (isBroadcaster) {
+      await engine.enableVideo();
+      await engine.startPreview();
+    }
 
-    await _engine.enableVideo();
-    await _engine.startPreview();
-
-    await _engine.joinChannel(
-      token: "",
+    await engine.joinChannel(
+      token: token,
       channelId: channelName,
       uid: uid,
-      options: const ChannelMediaOptions(
+      options: ChannelMediaOptions(
         channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
-        clientRoleType: ClientRoleType.clientRoleBroadcaster,
+        clientRoleType: isBroadcaster
+            ? ClientRoleType.clientRoleBroadcaster
+            : ClientRoleType.clientRoleAudience,
+        publishMicrophoneTrack: isBroadcaster,
+        publishCameraTrack: isBroadcaster,
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: true,
       ),
     );
   }
 
   Future<void> leaveChannel() async {
-    await _engine.leaveChannel();
-    await _engine.release();
+    final engine = _engine;
+    if (engine == null) return;
+    await engine.leaveChannel();
+    await engine.release();
+    _engine = null;
     _isInitialized = false;
   }
 }
