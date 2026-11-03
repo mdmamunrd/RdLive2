@@ -10,6 +10,7 @@ import '../widgets/hero_banner.dart';
 import '../widgets/home_header.dart';
 import '../widgets/rd_bottom_nav.dart';
 import '../widgets/room_card.dart';
+import 'host_live_screen.dart';
 import 'room_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -42,7 +43,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openRoom(LiveRoom room) {
-    // TODO: pass room.id and join the live room channel
     // Entering a room never needs a permission; ask for the mic in the background so voice seats work.
     PermissionPrompts.softAsk(PermissionService.voiceSet);
     Navigator.of(context).push(
@@ -51,11 +51,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _goLive() async {
-    if (!await PermissionPrompts.forLive(context)) return; // camera + microphone
-    if (!mounted) return;
-    // TODO: create room -> HostRoomScreen
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Go Live tapped'), duration: Duration(seconds: 1)));
+    final mode = await showModalBottomSheet<LiveMode>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _GoLiveSheet(),
+    );
+    if (mode == null || !mounted) return;
+
+    if (mode == LiveMode.video) {
+      if (!await PermissionPrompts.forLive(context)) return; // camera + microphone
+      if (!mounted) return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => HostLiveScreen(mode: mode)),
+    );
   }
 
   @override
@@ -136,11 +146,53 @@ class _HomeScreenState extends State<HomeScreen> {
         onSelect: (n) => setState(() => _nav = n),
         onGoLive: _goLive,
       ),
-      // Dev-only: long-press header area to sign out could be added; kept simple here.
       floatingActionButton: null,
     );
   }
 
   // ignore: unused_element
   Future<void> _signOut() => AuthService.instance.signOut();
+}
+
+class _GoLiveSheet extends StatelessWidget {
+  const _GoLiveSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Start a live',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.mic_rounded, color: AppColors.violet),
+              title: const Text('Audio Party'),
+              subtitle: const Text('Voice room with friends'),
+              onTap: () => Navigator.of(context).pop(LiveMode.audio),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam_rounded, color: AppColors.violet),
+              title: const Text('Video Live'),
+              subtitle: const Text('Go live with your camera'),
+              onTap: () => Navigator.of(context).pop(LiveMode.video),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
