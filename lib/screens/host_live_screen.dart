@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/agora_service.dart';
@@ -17,8 +21,8 @@ class HostLiveScreen extends StatefulWidget {
 }
 
 class _HostLiveScreenState extends State<HostLiveScreen> {
-  final _channelCtrl = TextEditingController(text: 'test123');
-  final _tokenCtrl = TextEditingController();
+  static const String _tokenUrl =
+      'https://graceful-stroopwafel-7d16c1.netlify.app/api/token';
 
   RtcEngine? _engine;
   String _channel = '';
@@ -30,10 +34,13 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
 
   bool get _isVideo => widget.mode == LiveMode.video;
 
+  String get _myChannel {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    return 'room_$uid';
+  }
+
   @override
   void dispose() {
-    _channelCtrl.dispose();
-    _tokenCtrl.dispose();
     _teardown();
     super.dispose();
   }
@@ -48,9 +55,47 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
     } catch (_) {}
   }
 
+  Future<String> _fetchToken(String channel) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw 'Please sign in again.';
+    final idToken = await user.getIdToken();
+    if (idToken == null || idToken.isEmpty) {
+      throw 'Could not read your login. Please sign in again.';
+    }
+
+    final res = await http
+        .post(
+          Uri.parse(_tokenUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $idToken',
+          },
+          body: jsonEncode({'channel': channel, 'role': 'host'}),
+        )
+        .timeout(const Duration(seconds: 20));
+
+    if (res.statusCode != 200) {
+      throw 'Token server error (${res.statusCode}): ${res.body}';
+    }
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final token = data['token'] as String?;
+    if (token == null || token.isEmpty) {
+      throw 'Token server returned no token.';
+    }
+    return token;
+  }
+
+  Future<void> _renewToken() async {
+    try {
+      final token = await _fetchToken(_channel);
+      await _engine?.renewToken(token);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not renew token: $e');
+    }
+  }
+
   Future<void> _start() async {
-    final channel = _channelCtrl.text.trim();
-    if (channel.isEmpty || _busy) return;
+    if (_busy) return;
 
     setState(() {
       _busy = true;
@@ -62,6 +107,9 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
     try {
       await _teardown();
 
+      final channel = _myChannel;
+      if (channel == 'room_') throw 'Please sign in again.';
+
       final perms = <Permission>[
         Permission.microphone,
         if (_isVideo) Permission.camera,
@@ -71,6 +119,8 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
         throw 'Permission denied. Please allow '
             '${_isVideo ? 'microphone and camera' : 'microphone'} in phone settings.';
       }
+
+      final token = await _fetchToken(channel);
 
       final engine = createAgoraRtcEngine();
       await engine.initialize(const RtcEngineContext(
@@ -91,6 +141,9 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
             UserOfflineReasonType reason) {
           if (mounted) setState(() => _remoteUids.remove(remoteUid));
         },
+        onTokenPrivilegeWillExpire: (RtcConnection connection, String token) {
+          _renewToken();
+        },
         onError: (ErrorCodeType err, String msg) {
           if (mounted) setState(() => _error = 'Agora error: $err $msg');
         },
@@ -104,7 +157,7 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
       await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
 
       await engine.joinChannel(
-        token: _tokenCtrl.text.trim(),
+        token: token,
         channelId: channel,
         uid: 0,
         options: ChannelMediaOptions(
@@ -167,33 +220,13 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
             style: const TextStyle(
                 color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
           ),
-          const SizedBox(height: 24),
-          TextField(
-            controller: _channelCtrl,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              labelText: 'Room (channel) name',
-              labelStyle: TextStyle(color: Colors.white70),
-              enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white38)),
-              focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: AppColors.gold)),
-            ),
+          const SizedBox(height: 8),
+          Text(
+            'Your room: $_myChannel',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _tokenCtrl,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              labelText: 'Token (paste test token)',
-              labelStyle: TextStyle(color: Colors.white70),
-              enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white38)),
-              focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: AppColors.gold)),
-            ),
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 28),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.gold,
@@ -342,9 +375,9 @@ class _HostLiveScreenState extends State<HostLiveScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
-            'You are live: $_channel',
-            style: const TextStyle(color: Colors.white, fontSize: 18),
+          const Text(
+            'You are live',
+            style: TextStyle(color: Colors.white, fontSize: 18),
           ),
         ],
       ),
