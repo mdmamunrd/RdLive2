@@ -14,9 +14,13 @@ class RoomController extends ChangeNotifier {
     RoomRole myRole = RoomRole.audience,
     bool seedMockData = true,
     this.autoApproveDemo = true,
+    int? seatCount,
+    bool hostSeatUnnumbered = false,
   })  : _layout = layout,
-        _myRole = myRole {
-    _seats = List<Seat>.generate(layout.count, (i) => Seat.empty(i));
+        _myRole = myRole,
+        _fixedSeatCount = seatCount,
+        _hostSeatUnnumbered = hostSeatUnnumbered {
+    _seats = List<Seat>.generate(seatCount ?? layout.count, (i) => Seat.empty(i));
     if (seedMockData) _seed();
   }
 
@@ -36,6 +40,13 @@ class RoomController extends ChangeNotifier {
 
   /// Demo only: a pretend host approves your seat request after 3 seconds.
   final bool autoApproveDemo;
+
+  /// When set, the room has exactly this many seats (seat 0 = host) and
+  /// [setLayout] is ignored. Used by the audio party room (host + 9 guests).
+  final int? _fixedSeatCount;
+
+  /// When true the host seat has no number and guest seats are numbered 1, 2, 3...
+  final bool _hostSeatUnnumbered;
 
   // ---- state -------------------------------------------------------------
   SeatLayout _layout;
@@ -68,6 +79,9 @@ class RoomController extends ChangeNotifier {
   bool get requireApproval => _requireApproval;
   bool get canModerate => _myRole != RoomRole.audience;
   bool get isHost => _myRole == RoomRole.host;
+
+  /// The number people see for a seat index (used in messages).
+  String seatNumber(int index) => _hostSeatUnnumbered ? '$index' : '${index + 1}';
 
   RoomUser get me => RoomUser(
         id: meId,
@@ -114,16 +128,16 @@ class RoomController extends ChangeNotifier {
     }
     final seat = _seats[index];
     if (seat.isLocked) {
-      _say('Seat ${index + 1} is locked');
+      _say('Seat ${seatNumber(index)} is locked');
       return;
     }
     if (seat.isOccupied) {
-      _say('Seat ${index + 1} is taken');
+      _say('Seat ${seatNumber(index)} is taken');
       return;
     }
     if (canModerate || !_requireApproval) {
       _occupy(index, me);
-      _say('You joined seat ${index + 1}');
+      _say('You joined seat ${seatNumber(index)}');
       notifyListeners();
       return;
     }
@@ -214,7 +228,7 @@ class RoomController extends ChangeNotifier {
     _requests = [
       for (final r in _requests) r.seatIndex == index ? r.withSeat(null) : r,
     ];
-    _say('Seat ${index + 1} locked');
+    _say('Seat ${seatNumber(index)} locked');
     notifyListeners();
   }
 
@@ -222,7 +236,7 @@ class RoomController extends ChangeNotifier {
     if (!_requireStaff()) return;
     if (index < 0 || index >= _seats.length || !_seats[index].isLocked) return;
     _seats[index] = Seat.empty(index);
-    _say('Seat ${index + 1} unlocked');
+    _say('Seat ${seatNumber(index)} unlocked');
     notifyListeners();
   }
 
@@ -242,6 +256,7 @@ class RoomController extends ChangeNotifier {
   }
 
   void setLayout(SeatLayout next) {
+    if (_fixedSeatCount != null) return; // fixed seat count (audio party room)
     if (next == _layout) return;
     final old = _seats;
     final fresh = List<Seat>.generate(
@@ -352,6 +367,9 @@ class RoomController extends ChangeNotifier {
     _seatMock(2, mockUsers[1], mic: false, cam: false); // Rahim, mic off
     if (_seats.length > 3) _seats[3] = Seat.locked(3);
     _seatMock(5, mockUsers[2], mic: true, cam: false); // Mansur (8-seat only)
+    if (_fixedSeatCount != null) {
+      _seatMock(7, mockUsers[5], mic: true, cam: false); // Layla (party room only)
+    }
     _requests = [
       SeatRequest(
           id: 'r1',
@@ -391,7 +409,7 @@ class RoomController extends ChangeNotifier {
     }
     _requests = _requests.where((r) => r.id != requestId).toList();
     _occupy(target, req.user);
-    _say('${req.user.name} joined seat ${target + 1}');
+    _say('${req.user.name} joined seat ${seatNumber(target)}');
     notifyListeners();
     return true;
   }
