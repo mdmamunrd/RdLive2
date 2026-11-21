@@ -7,6 +7,12 @@ import '../theme/app_theme.dart';
 import 'avatar_circle.dart';
 import 'sheet_frame.dart';
 
+/// Name shown for a seat. In the party room the host seat has no number and the
+/// guest seats are numbered 1, 2, 3...; in the classic room every seat is
+/// numbered from 1. [RoomController.seatNumber] knows which one applies.
+String _seatName(RoomController c, int index) =>
+    (index == 0 && c.seatNumber(0) == '0') ? 'Host seat' : 'Seat ${c.seatNumber(index)}';
+
 /// Bottom sheet shown when a seat is tapped. The content depends on the seat
 /// state and on the viewer's role:
 ///  - empty seat   : request to join / cancel request (staff: take seat, lock)
@@ -95,7 +101,7 @@ class _SeatSheetBody extends StatelessWidget {
   // ---- locked ---------------------------------------------------------------
   Widget _locked(BuildContext context, Seat seat) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      _Title(icon: Icons.lock_rounded, text: 'Seat ${seat.index + 1} is locked'),
+      _Title(icon: Icons.lock_rounded, text: '${_seatName(controller, seat.index)} is locked'),
       if (controller.canModerate)
         _ActionTile(
           icon: Icons.lock_open_rounded,
@@ -118,7 +124,7 @@ class _SeatSheetBody extends StatelessWidget {
     final staff = controller.canModerate;
     final myReq = controller.myRequest;
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      _Title(icon: Icons.event_seat_rounded, text: 'Seat ${seat.index + 1}'),
+      _Title(icon: Icons.event_seat_rounded, text: _seatName(controller, seat.index)),
       if (staff) ...[
         if (!controller.isSeated)
           _ActionTile(
@@ -163,7 +169,7 @@ class _SeatSheetBody extends StatelessWidget {
   Widget _mine(BuildContext context, Seat seat) {
     final user = seat.user!;
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      _ProfileHeader(user: user, subtitle: 'Seat ${seat.index + 1} · You'),
+      _ProfileHeader(user: user, subtitle: '${_seatName(controller, seat.index)} · You'),
       const SizedBox(height: 4),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
@@ -204,7 +210,7 @@ class _SeatSheetBody extends StatelessWidget {
     return Column(mainAxisSize: MainAxisSize.min, children: [
       _ProfileHeader(
         user: user,
-        subtitle: 'Seat ${seat.index + 1}${seat.isMuted ? ' · muted' : ''}',
+        subtitle: '${_seatName(controller, seat.index)}${seat.isMuted ? ' · muted' : ''}',
       ),
       const SizedBox(height: 4),
       _ActionTile(
