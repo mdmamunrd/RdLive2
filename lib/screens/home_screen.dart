@@ -11,6 +11,7 @@ import '../widgets/home_header.dart';
 import '../widgets/rd_bottom_nav.dart';
 import '../widgets/room_card.dart';
 import 'host_live_screen.dart';
+import 'host_room_screen.dart';
 import 'room_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -61,10 +62,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mode == LiveMode.video) {
       if (!await PermissionPrompts.forLive(context)) return; // camera + microphone
       if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => HostLiveScreen(mode: mode)),
+      );
+      return;
     }
 
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => HostLiveScreen(mode: mode)),
+      MaterialPageRoute<void>(builder: (_) => const HostRoomScreen()),
     );
   }
 
