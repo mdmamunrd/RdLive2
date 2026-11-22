@@ -6,6 +6,13 @@ import '../theme/app_theme.dart';
 import 'avatar_circle.dart';
 import 'sheet_frame.dart';
 
+/// True in the audio party room: the host seat has no number and the guest
+/// seats are numbered 1, 2, 3... (the classic room numbers every seat from 1).
+bool _isParty(RoomController c) => c.seatNumber(0) == '0';
+
+String _seatLabel(RoomController c, int index) =>
+    (index == 0 && _isParty(c)) ? 'host seat' : 'seat ${c.seatNumber(index)}';
+
 /// Host / moderator control panel:
 ///  - Requests     : approve / reject pending seat requests
 ///  - Participants : mute, kick, ban
@@ -56,7 +63,7 @@ class RoomControlPanel extends StatelessWidget {
                   value: controller.requireApproval,
                   onChanged: (v) => controller.requireApproval = v,
                 ),
-                if (controller.isHost)
+                if (controller.isHost && !_isParty(controller))
                   Align(
                     alignment: Alignment.centerLeft,
                     child: SegmentedButton<SeatLayout>(
@@ -116,7 +123,7 @@ class _RequestsTab extends StatelessWidget {
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, i) {
         final r = list[i];
-        final wants = r.seatIndex == null ? 'any seat' : 'seat ${r.seatIndex! + 1}';
+        final wants = r.seatIndex == null ? 'any seat' : _seatLabel(controller, r.seatIndex!);
         return ListTile(
           contentPadding: EdgeInsets.zero,
           leading: AvatarCircle(name: r.user.name, url: r.user.avatarUrl, size: 42),
@@ -182,7 +189,7 @@ class _PeopleTab extends StatelessWidget {
           ]),
           subtitle: Text([
             'Lv.${u.level}',
-            seat != null ? 'seat ${seat.index + 1}' : 'audience',
+            seat != null ? _seatLabel(controller, seat.index) : 'audience',
             if (u.isMuted) 'muted',
           ].join(' · ')),
           trailing: canAct
