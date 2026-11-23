@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/room_models.dart';
 import '../permissions/permission_prompts.dart';
+import '../services/room_api.dart';
 import '../services/room_controller.dart';
 import '../theme/app_theme.dart';
 import 'avatar_circle.dart';
@@ -413,15 +414,15 @@ class _GiftPickerBodyState extends State<_GiftPickerBody> {
         roomId: widget.roomId,
         giftId: gift.id,
       );
-      _snack(context, 'Gift sent to ${widget.receiver.name}');
+      if (context.mounted) _snack(context, 'Gift sent to ${widget.receiver.name}');
       try {
         widget.controller.setCoins(await RoomApi.instance.myCoins());
       } catch (_) {}
       return true;
     } on ApiException catch (e) {
-      _snack(context, e.message);
+      if (context.mounted) _snack(context, e.message);
     } catch (_) {
-      _snack(context, 'Could not send the gift. Try again.');
+      if (context.mounted) _snack(context, 'Could not send the gift. Try again.');
     } finally {
       if (mounted) setState(() => _sending = false);
     }

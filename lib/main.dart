@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'permissions/permission_bootstrap.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
-import 'screens/live_screen.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {

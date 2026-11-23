@@ -20,6 +20,10 @@ import '../widgets/party_seat_board.dart';
 import '../widgets/room_control_panel.dart';
 import '../widgets/seat_action_sheet.dart';
 
+/// Host seat + guest seats. The server room may define fewer or more seats;
+/// the UI never shows fewer than this.
+const int _kPartySeats = 10;
+
 /// Real live room. Joins the backend room (`POST /v1/rooms/{id}/join`),
 /// listens on the room's Agora channel as an audience member, and switches to
 /// broadcaster (mic live for everyone) as soon as a seat is granted.
@@ -760,7 +764,7 @@ class _RoomScreenState extends State<RoomScreen> {
           if (seat.index != 0) ...[
             const SizedBox(height: 8),
             FilterChip(
-              label: SizedBox(
+              label: const SizedBox(
                 width: 56,
                 child: Center(
                   child: Text('Leave',
