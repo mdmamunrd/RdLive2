@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/room_models.dart';
 import '../services/agora_service.dart';
+import '../services/room_api.dart';
 import '../services/room_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/avatar_circle.dart';
@@ -47,6 +48,7 @@ class _HostRoomScreenState extends State<HostRoomScreen> {
   final List<_ChatLine> _chat = [];
 
   RtcEngine? _engine;
+  int? _roomId;
   String _channel = '';
   bool _joined = false;
   bool _speakerOn = true;
@@ -93,6 +95,13 @@ class _HostRoomScreenState extends State<HostRoomScreen> {
   // ---- Agora ------------------------------------------------------------------
 
   Future<void> _teardown() async {
+    final room = _roomId;
+    _roomId = null;
+    if (room != null) {
+      try {
+        await RoomApi.instance.endRoom(room);
+      } catch (_) {}
+    }
     final engine = _engine;
     _engine = null;
     if (engine == null) return;
@@ -153,7 +162,15 @@ class _HostRoomScreenState extends State<HostRoomScreen> {
 
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw 'Please sign in again.';
-      final channel = 'room_${user.uid}';
+
+      final created = await RoomApi.instance.createRoom(
+        title: _myName,
+        seatCount: 12,
+        mediaMode: 'audio',
+      );
+      _roomId = (created['room_id'] as num).toInt();
+      final channel =
+          created['agora_channel'] as String? ?? 'room_${user.uid}';
 
       final mic = await Permission.microphone.request();
       if (!mic.isGranted) {

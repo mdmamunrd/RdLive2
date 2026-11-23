@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/room_models.dart';
 import '../permissions/permission_prompts.dart';
+import '../services/room_api.dart';
 import '../services/room_controller.dart';
 import '../theme/app_theme.dart';
 import 'avatar_circle.dart';
@@ -24,6 +25,7 @@ class SeatActionSheet {
     BuildContext context, {
     required RoomController controller,
     required Seat seat,
+    int? roomId,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -33,6 +35,7 @@ class SeatActionSheet {
         hostContext: context,
         controller: controller,
         seatIndex: seat.index,
+        roomId: roomId,
       ),
     );
   }
@@ -42,11 +45,13 @@ class _SeatSheetBody extends StatelessWidget {
   final BuildContext hostContext; // still valid after the sheet closes
   final RoomController controller;
   final int seatIndex;
+  final int? roomId;
 
   const _SeatSheetBody({
     required this.hostContext,
     required this.controller,
     required this.seatIndex,
+    this.roomId,
   });
 
   @override
@@ -226,7 +231,8 @@ class _SeatSheetBody extends StatelessWidget {
         label: 'Send gift',
         onTap: () {
           _close(context);
-          GiftPickerSheet.show(hostContext, controller: controller, receiver: user);
+          GiftPickerSheet.show(hostContext,
+              controller: controller, receiver: user, roomId: roomId);
         },
       ),
       if (canAct) ...[
@@ -329,12 +335,15 @@ class GiftPickerSheet {
     BuildContext context, {
     required RoomController controller,
     required RoomUser receiver,
+    int? roomId,
   }) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SheetFrame(child: _GiftPickerBody(controller: controller, receiver: receiver)),
+      builder: (_) => SheetFrame(
+          child: _GiftPickerBody(
+              controller: controller, receiver: receiver, roomId: roomId)),
     );
   }
 }
@@ -342,7 +351,14 @@ class GiftPickerSheet {
 class _GiftPickerBody extends StatefulWidget {
   final RoomController controller;
   final RoomUser receiver;
-  const _GiftPickerBody({required this.controller, required this.receiver});
+
+  /// Non-null in real rooms: gifts go through `POST /v1/gifts/send`.
+  final int? roomId;
+  const _GiftPickerBody({
+    required this.controller,
+    required this.receiver,
+    this.roomId,
+  });
 
   @override
   State<_GiftPickerBody> createState() => _GiftPickerBodyState();
@@ -350,11 +366,83 @@ class _GiftPickerBody extends StatefulWidget {
 
 class _GiftPickerBodyState extends State<_GiftPickerBody> {
   int _selected = 0;
+  bool _sending = false;
+
+  /// Real rooms load the catalogue from `GET /v1/gifts`.
+  List<GiftOption> _gifts = kMockGifts;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGifts();
+  }
+
+  Future<void> _loadGifts() async {
+    if (widget.roomId == null) return;
+    try {
+      final gifts = await RoomApi.instance.fetchGifts();
+      if (!mounted || gifts.isEmpty) return;
+      setState(() {
+        _gifts = gifts;
+        if (_selected >= gifts.length) _selected = 0;
+      });
+    } catch (_) {}
+  }
+
+  GiftOption get _selectedGift => _gifts[_selected];
+
+  Future<void> _send(BuildContext context) async {
+    if (_sending) return;
+    final gift = _selectedGift;
+    final sent = widget.roomId != null
+        ? await _sendReal(context, gift)
+        : widget.controller.sendGift(widget.receiver.id, gift);
+    if (sent && context.mounted) Navigator.of(context).pop();
+  }
+
+  /// Real backend gift. The receiver must be a server user (numeric id).
+  Future<bool> _sendReal(BuildContext context, GiftOption gift) async {
+    final receiverId = int.tryParse(widget.receiver.id);
+    if (receiverId == null) {
+      _snack(context, 'This user cannot receive gifts yet');
+      return false;
+    }
+    setState(() => _sending = true);
+    try {
+      await RoomApi.instance.sendGift(
+        receiverId: receiverId,
+        roomId: widget.roomId,
+        giftId: gift.id,
+      );
+      if (context.mounted) _snack(context, 'Gift sent to ${widget.receiver.name}');
+      try {
+        widget.controller.setCoins(await RoomApi.instance.myCoins());
+      } catch (_) {}
+      return true;
+    } on ApiException catch (e) {
+      if (context.mounted) _snack(context, e.message);
+    } catch (_) {
+      if (context.mounted) _snack(context, 'Could not send the gift. Try again.');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+    return false;
+  }
+
+  void _snack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 1800),
+      ));
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
-    final gift = kMockGifts[_selected];
+    final gift = _selectedGift;
     return AnimatedBuilder(
       animation: c,
       builder: (context, _) => Column(mainAxisSize: MainAxisSize.min, children: [
@@ -372,7 +460,7 @@ class _GiftPickerBodyState extends State<_GiftPickerBody> {
           spacing: 10,
           runSpacing: 10,
           children: [
-            for (var i = 0; i < kMockGifts.length; i++)
+            for (var i = 0; i < _gifts.length; i++)
               GestureDetector(
                 onTap: () => setState(() => _selected = i),
                 child: Container(
@@ -387,11 +475,11 @@ class _GiftPickerBodyState extends State<_GiftPickerBody> {
                     ),
                   ),
                   child: Column(children: [
-                    Text(kMockGifts[i].emoji, style: const TextStyle(fontSize: 30)),
+                    Text(_gifts[i].emoji, style: const TextStyle(fontSize: 30)),
                     const SizedBox(height: 4),
-                    Text(kMockGifts[i].name,
+                    Text(_gifts[i].name,
                         maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                    Text('🪙 ${kMockGifts[i].price}',
+                    Text('🪙 ${_gifts[i].price}',
                         style: const TextStyle(fontSize: 11, color: Colors.black54)),
                   ]),
                 ),
@@ -406,7 +494,7 @@ class _GiftPickerBodyState extends State<_GiftPickerBody> {
             minimumSize: const Size.fromHeight(48),
           ),
           onPressed: () {
-            if (c.sendGift(widget.receiver.id, gift)) Navigator.of(context).pop();
+            _send(context);
           },
           icon: const Icon(Icons.send_rounded),
           label: Text('Send ${gift.emoji} · 🪙 ${gift.price}'),
