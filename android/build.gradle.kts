@@ -45,6 +45,22 @@ subprojects {
 subprojects {
     if (project.name != "app") {
         afterEvaluate {
+            val androidExt = extensions.findByName("android")
+            if (androidExt != null) {
+                try {
+                    val co = androidExt.javaClass.methods.firstOrNull {
+                        it.name == "getCompileOptions" && it.parameterCount == 0
+                    }?.invoke(androidExt)
+                    if (co != null) {
+                        co.javaClass.methods.firstOrNull { it.name == "setSourceCompatibility" }
+                            ?.invoke(co, JavaVersion.VERSION_17)
+                        co.javaClass.methods.firstOrNull { it.name == "setTargetCompatibility" }
+                            ?.invoke(co, JavaVersion.VERSION_17)
+                    }
+                } catch (e: Exception) {
+                    println("compileOptions override skipped for ${project.name}: $e")
+                }
+            }
             tasks.withType(JavaCompile::class.java).configureEach {
                 sourceCompatibility = JavaVersion.VERSION_17.toString()
                 targetCompatibility = JavaVersion.VERSION_17.toString()
