@@ -35,10 +35,12 @@ func (a *API) roomFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.DB.Query(r.Context(), `
-		select f.id, f.host_name, coalesce(f.country_code,'BD'), f.cover_url, f.badge, f.audience_avatars,
+		select f.id, coalesce(u.public_id, 0), lr.host_id, lr.agora_channel,
+		       f.host_name, coalesce(f.country_code,'BD'), f.cover_url, f.badge, f.audience_avatars,
 		       f.viewer_count, f.media_mode::text, f.seat_count, f.is_password_protected
 		from v_live_rooms_feed f
 		join live_rooms lr on lr.id = f.id
+		join users u on u.id = lr.host_id
 		`+join+`
 		where not exists (select 1 from user_blocks b
 		                   where (b.blocker_id=$1 and b.blocked_id=lr.host_id) or (b.blocker_id=lr.host_id and b.blocked_id=$1))
@@ -51,6 +53,9 @@ func (a *API) roomFeed(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	type room struct {
 		ID               int64    `json:"id"`
+		HostPublicID     int64    `json:"host_public_id"`
+		HostID           int64    `json:"host_id"`
+		AgoraChannel     string   `json:"agora_channel"`
 		HostName         string   `json:"host_name"`
 		CountryCode      string   `json:"country_code"`
 		CoverURL         *string  `json:"cover_url"`
@@ -64,7 +69,7 @@ func (a *API) roomFeed(w http.ResponseWriter, r *http.Request) {
 	out := []room{}
 	for rows.Next() {
 		var x room
-		if err := rows.Scan(&x.ID, &x.HostName, &x.CountryCode, &x.CoverURL, &x.Badge, &x.AudienceAvatars,
+		if err := rows.Scan(&x.ID, &x.HostPublicID, &x.HostID, &x.AgoraChannel, &x.HostName, &x.CountryCode, &x.CoverURL, &x.Badge, &x.AudienceAvatars,
 			&x.ViewerCount, &x.MediaMode, &x.SeatCount, &x.PasswordRequired); err != nil {
 			dbErr(w, "roomFeed scan", err)
 			return

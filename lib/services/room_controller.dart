@@ -330,6 +330,109 @@ class RoomController extends ChangeNotifier {
     return true;
   }
 
+  // ---- real backend state (GET /v1/rooms/{id} snapshot) ------------------
+
+  /// Replaces the local state with a real room snapshot from the backend.
+  /// `myUserId` is the viewer's backend user id; their entries are mapped to
+  /// `RoomController.meId` so the existing "my seat" logic works.
+  void applyServerSnapshot(Map<String, dynamic> snap) {
+    final myId = '${snap['my_user_id'] ?? ''}';
+    _myRole = _roleFromText(snap['my_role'] as String?);
+
+    final room = (snap['room'] as Map<String, dynamic>?) ?? const {};
+    if (room['require_approval'] is bool) {
+      _requireApproval = room['require_approval'] as bool;
+    }
+
+    final seatList =
+        (snap['seats'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+    final rebuilt = List<Seat>.generate(_seats.length, Seat.empty);
+    final participants = <RoomUser>[];
+    final seen = <String>{};
+    for (final s in seatList) {
+      final idx = (s['seat_index'] as num?)?.toInt() ?? -1;
+      if (idx < 0 || idx >= rebuilt.length) continue;
+      final state = s['state'] as String?;
+      if (state == 'locked') {
+        rebuilt[idx] = Seat.locked(idx);
+        continue;
+      }
+      if (state != 'occupied') continue;
+      final user = _userFromJson(s, myId);
+      if (user == null) continue;
+      rebuilt[idx] = Seat.occupied(
+        idx,
+        user,
+        mic: (s['mic_on'] as bool?) ?? false,
+        cam: (s['camera_on'] as bool?) ?? false,
+      );
+      participants.add(user);
+      seen.add(user.id);
+    }
+
+    final memberList =
+        (snap['members'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+    for (final m in memberList) {
+      final user = _userFromJson(m, myId);
+      if (user == null || seen.contains(user.id)) continue;
+      participants.add(user);
+      seen.add(user.id);
+    }
+    if (!seen.contains(meId)) {
+      participants.add(me);
+      seen.add(meId);
+    }
+    _participants = participants;
+
+    final requestList =
+        (snap['requests'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+    _requests = [
+      for (final q in requestList)
+        if (_userFromJson(q, myId) != null)
+          SeatRequest(
+            id: '${q['id']}',
+            user: _userFromJson(q, myId)!,
+            seatIndex: (q['seat_index'] as num?)?.toInt(),
+            requestedAt: DateTime.now(),
+          ),
+    ];
+    notifyListeners();
+  }
+
+  void setCoins(int value) {
+    if (value == _coins) return;
+    _coins = value;
+    notifyListeners();
+  }
+
+  RoomUser? _userFromJson(Map<String, dynamic> s, String myId) {
+    final uid = (s['user_id'] as num?)?.toInt();
+    if (uid == null) return null;
+    final isMe = '$uid' == myId;
+    final name = s['display_name'] as String?;
+    final avatar = s['avatar_url'] as String?;
+    return RoomUser(
+      id: isMe ? meId : '$uid',
+      name: isMe ? 'You' : (name == null || name.isEmpty ? 'Guest' : name),
+      countryCode: (s['country_code'] as String?) ?? 'BD',
+      avatarUrl: (avatar == null || avatar.isEmpty) ? null : avatar,
+      level: (s['level'] as num?)?.toInt() ?? 1,
+      role: _roleFromText(s['user_role'] as String? ?? s['role'] as String?),
+      isMuted: (s['user_muted'] as bool? ?? s['is_muted'] as bool?) ?? false,
+    );
+  }
+
+  RoomRole _roleFromText(String? text) {
+    switch (text) {
+      case 'host':
+        return RoomRole.host;
+      case 'moderator':
+        return RoomRole.moderator;
+      default:
+        return RoomRole.audience;
+    }
+  }
+
   // ---- demo helper: act as another role --------------------------------
 
   void setMyRole(RoomRole role) {

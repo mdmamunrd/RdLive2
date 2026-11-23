@@ -7,6 +7,13 @@ class LiveRoom {
   final String? coverUrl;
   final String? badge; // e.g. "New Star"
   final List<String> audienceAvatars; // up to 3 thumbnails
+  final int hostId; // internal user id (gift receiver)
+  final int? hostPublicId; // 8-digit id (follow / profile)
+  final String? agoraChannel; // Agora channel name of the live room
+  final int viewerCount;
+  final String mediaMode; // "audio" | "video"
+  final int seatCount;
+  final bool passwordRequired;
 
   const LiveRoom({
     required this.id,
@@ -15,6 +22,13 @@ class LiveRoom {
     this.coverUrl,
     this.badge,
     this.audienceAvatars = const [],
+    this.hostId = 0,
+    this.hostPublicId,
+    this.agoraChannel,
+    this.viewerCount = 0,
+    this.mediaMode = 'audio',
+    this.seatCount = 10,
+    this.passwordRequired = false,
   });
 
   factory LiveRoom.fromJson(Map<String, dynamic> j) => LiveRoom(
@@ -25,7 +39,19 @@ class LiveRoom {
         badge: j['badge'] as String?,
         audienceAvatars:
             (j['audience_avatars'] as List?)?.cast<String>() ?? const [],
+        hostId: _toInt(j['host_id']),
+        hostPublicId: _toIntOrNull(j['host_public_id']),
+        agoraChannel: j['agora_channel'] as String?,
+        viewerCount: _toInt(j['viewer_count']),
+        mediaMode: (j['media_mode'] as String?) ?? 'audio',
+        seatCount: (_toInt(j['seat_count']) == 0 ? 10 : _toInt(j['seat_count'])),
+        passwordRequired: (j['password_required'] as bool?) ?? false,
       );
+
+  static int _toInt(dynamic v) => v == null ? 0 : int.tryParse(v.toString()) ?? 0;
+
+  static int? _toIntOrNull(dynamic v) =>
+      v == null ? null : int.tryParse(v.toString());
 
   /// Converts "BD" -> 🇧🇩
   String get flagEmoji {

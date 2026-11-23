@@ -1,38 +1,38 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 
-import '../models/pk_models.dart';
+import '../models/live_room.dart';
 import '../models/room_models.dart';
 import '../permissions/permission_prompts.dart';
-import '../services/pk_controller.dart';
+import '../services/agora_service.dart';
+import '../services/room_api.dart';
 import '../services/room_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/festive_decor.dart';
 import '../widgets/party_seat_board.dart';
-import '../widgets/pk_battle_overlay.dart';
 import '../widgets/room_control_panel.dart';
 import '../widgets/seat_action_sheet.dart';
 
-/// Host seat + 9 guest seats.
-const int _kPartySeats = 10;
-
-/// Audio party room (mock data): host card, viewer chip, host and VIP seats,
-/// 9 numbered seats, rules notice, local chat, Join Call and the bottom bar.
-/// The "more" button has demo switches (act as audience/moderator/host, PK).
+/// Real live room. Joins the backend room (`POST /v1/rooms/{id}/join`),
+/// listens on the room's Agora channel as an audience member, and switches to
+/// broadcaster (mic live for everyone) as soon as a seat is granted.
 class RoomScreen extends StatefulWidget {
-  final String title;
+  final LiveRoom room;
 
-  /// Kept so older callers still compile. The party room always has 9 guest seats.
-  final SeatLayout initialLayout;
-  final RoomRole initialRole;
+  /// Sent only when the room is password protected.
+  final String? joinPassword;
 
   const RoomScreen({
     super.key,
-    this.title = 'RAFIYA',
-    this.initialLayout = SeatLayout.eight,
-    this.initialRole = RoomRole.audience,
+    required this.room,
+    this.joinPassword,
   });
 
   @override
@@ -47,41 +47,342 @@ class _ChatLine {
 }
 
 class _RoomScreenState extends State<RoomScreen> {
-  late final RoomController _room;
-  late final PkController _pk;
-  StreamSubscription<String>? _sub;
-  final TextEditingController _chatCtrl = TextEditingController();
-  final List<_ChatLine> _chat = [
-    const _ChatLine(level: 1, name: 'N/A', text: 'Joined the room'),
-  ];
+  /// Agora token server (same deployment the host screens use).
+  static const String _tokenUrl =
+      'https://graceful-stroopwafel-7d16c1.netlify.app/api/token';
 
-  bool _pkVisible = false;
-  bool _following = false;
+  late final RoomController _room;
+  late final int _roomId;
+  late final int _hostUserId;
+  Timer? _poll;
+
+  final TextEditingController _chatCtrl = TextEditingController();
+  final List<_ChatLine> _chat = [];
+
+  RtcEngine? _engine;
+  String _channel = '';
+  bool _serverJoined = false;
   bool _speakerOn = true;
+  bool _ending = false;
+  bool _following = false;
+  bool _lastMicActive = false;
+  String _error = '';
 
   @override
   void initState() {
     super.initState();
+    _roomId = int.tryParse(widget.room.id) ?? 0;
+    _hostUserId = widget.room.hostId;
     _room = RoomController(
-      layout: widget.initialLayout,
-      myRole: widget.initialRole,
-      seatCount: _kPartySeats,
+      layout: SeatLayout.eight,
+      myRole: RoomRole.audience,
+      seedMockData: false,
+      autoApproveDemo: false,
+      seatCount: widget.room.seatCount < _kPartySeats
+          ? _kPartySeats
+          : widget.room.seatCount,
       hostSeatUnnumbered: true,
     );
-    _pk = PkController(
-      hostA: PkHost(id: 'host', name: widget.title, countryCode: 'SA'),
-      hostB: const PkHost(id: 'host_b', name: 'KKAGENCY', countryCode: 'BD'),
-    );
-    _sub = _room.messages.listen(_toast);
+    _room.addListener(_syncMic);
+    _chat.add(_ChatLine(level: 1, name: widget.room.hostName, text: 'Live now'));
+    _enter();
   }
 
   @override
   void dispose() {
-    _sub?.cancel();
+    _poll?.cancel();
+    _room.removeListener(_syncMic);
     _room.dispose();
-    _pk.dispose();
     _chatCtrl.dispose();
+    _teardown();
     super.dispose();
+  }
+
+  // ---- backend -------------------------------------------------------------
+
+  Future<void> _enter() async {
+    setState(() => _error = '');
+    try {
+      await RoomApi.instance.joinRoom(_roomId, password: widget.joinPassword);
+      _serverJoined = true;
+      final snap = await RoomApi.instance.roomSnapshot(_roomId);
+      _room.applyServerSnapshot(snap);
+      final info = (snap['room'] as Map<String, dynamic>?) ?? const {};
+      _channel = (info['agora_channel'] as String?) ?? widget.room.agoraChannel ?? '';
+      if (_channel.isEmpty) throw 'This live room has no media channel.';
+      _loadFollowing();
+      _refreshCoins();
+      await _joinAgora();
+      _startPolling();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = _friendly(e));
+    }
+  }
+
+  void _startPolling() {
+    _poll?.cancel();
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _pull());
+  }
+
+  Future<void> _pull() async {
+    if (_ending || !_serverJoined) return;
+    try {
+      final snap = await RoomApi.instance.roomSnapshot(_roomId);
+      if (!mounted) return;
+      _room.applyServerSnapshot(snap);
+      _syncAgoraRole();
+    } catch (_) {
+      // Transient network issues keep the last known state; next poll retries.
+    }
+  }
+
+  Future<void> _refreshCoins() async {
+    try {
+      final coins = await RoomApi.instance.myCoins();
+      _room.setCoins(coins);
+    } catch (_) {}
+  }
+
+  Future<void> _loadFollowing() async {
+    final pid = widget.room.hostPublicId;
+    if (pid == null || pid == 0) return;
+    try {
+      final card = await RoomApi.instance.get('/v1/users/$pid');
+      if (!mounted) return;
+      setState(() => _following = card['is_following'] as bool? ?? false);
+    } catch (_) {}
+  }
+
+  String _friendly(Object e) {
+    if (e is ApiException) {
+      if (e.code == 'wrong_password') return 'Wrong room password.';
+      return e.message;
+    }
+    return 'Could not connect to the live room. Check your connection and try again.';
+  }
+
+  // ---- Agora ------------------------------------------------------------------
+
+  Future<void> _teardown() async {
+    final engine = _engine;
+    _engine = null;
+    final roomId = _roomId;
+    final joined = _serverJoined;
+    _serverJoined = false;
+    if (joined) {
+      try {
+        if (_room.isSeated) {
+          await RoomApi.instance.leaveSeat(roomId);
+        }
+        await RoomApi.instance.leaveRoom(roomId);
+      } catch (_) {}
+    }
+    if (engine == null) return;
+    try {
+      await engine.leaveChannel();
+      await engine.release();
+    } catch (_) {}
+  }
+
+  Future<String> _fetchToken() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return '';
+      final idToken = await user.getIdToken();
+      if (idToken == null || idToken.isEmpty) return '';
+      final res = await http
+          .post(
+            Uri.parse(_tokenUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $idToken',
+            },
+            body: jsonEncode({'channel': _channel, 'role': 'audience'}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200) return '';
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      return data['token'] as String? ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _joinAgora() async {
+    await [Permission.microphone].request();
+    final engine = createAgoraRtcEngine();
+    await engine.initialize(const RtcEngineContext(
+      appId: AgoraService.appId,
+      channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
+    ));
+    _engine = engine;
+    engine.registerEventHandler(RtcEngineEventHandler(
+      onJoinChannelSuccess: (RtcConnection connection, int elapsed) {},
+      onTokenPrivilegeWillExpire: (RtcConnection connection, String token) async {
+        // Token-free App ID mode: nothing to renew.
+      },
+      onError: (ErrorCodeType err, String msg) {
+        if (mounted) setState(() => _error = 'Audio error: $err');
+      },
+    ));
+    await engine.enableAudio();
+    await engine.setClientRole(role: ClientRoleType.clientRoleAudience);
+    final token = await _fetchToken();
+    await engine.joinChannel(
+      token: token,
+      channelId: _channel,
+      uid: 0,
+      options: const ChannelMediaOptions(
+        channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
+        clientRoleType: ClientRoleType.clientRoleAudience,
+        publishMicrophoneTrack: false,
+        publishCameraTrack: false,
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: true,
+      ),
+    );
+  }
+
+  /// Mirrors the server state onto the Agora engine: audience while only
+  /// watching, broadcaster (mic published) once a seat is granted.
+  void _syncAgoraRole() {
+    final engine = _engine;
+    if (engine == null) return;
+    final seat = _room.mySeat;
+    final micActive = seat?.micActive ?? false;
+    if (seat != null && _room.myRole != RoomRole.audience) {
+      unawaited(() async {
+        await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
+        await engine.muteLocalAudioStream(!micActive);
+      }());
+    } else if (seat == null) {
+      unawaited(() async {
+        await engine.setClientRole(role: ClientRoleType.clientRoleAudience);
+        await engine.muteLocalAudioStream(true);
+      }());
+    }
+  }
+
+  /// The controller is the single source of truth for the mic switch;
+  /// Agora follows it (only when we are the broadcaster).
+  void _syncMic() {
+    final active = _room.mySeat?.micActive ?? false;
+    if (active == _lastMicActive) return;
+    _lastMicActive = active;
+    final engine = _engine;
+    if (engine != null) unawaited(engine.muteLocalAudioStream(!active));
+  }
+
+  void _toggleSpeaker() {
+    final next = !_speakerOn;
+    setState(() => _speakerOn = next);
+    final engine = _engine;
+    if (engine != null) unawaited(engine.muteAllRemoteAudioStreams(!next));
+  }
+
+  // ---- leaving ----------------------------------------------------------------
+
+  Future<void> _onBack() async {
+    if (_ending) return;
+    if (_room.isHost && _serverJoined) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('End live?'),
+          content: const Text('Your room will be closed for everyone.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('End live'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      _ending = true;
+      try {
+        await RoomApi.instance.endRoom(_roomId);
+      } catch (_) {}
+    } else {
+      _ending = true;
+    }
+    await _teardown();
+    if (!mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  // ---- seats / mic / chat / follow / gifts --------------------------------------
+
+  Future<void> _joinSeat() async {
+    if (!_serverJoined) return;
+    final i = _room.seats.indexWhere((s) => s.isEmpty && s.index != 0);
+    if (i == -1) {
+      _toast('No free seats');
+      return;
+    }
+    if (!await PermissionPrompts.forVoice(context)) return;
+    if (!mounted) return;
+    try {
+      final res = await RoomApi.instance.requestSeat(_roomId, seatIndex: i);
+      if (res['result'] == 'seated') {
+        await _pull();
+        if (!mounted) return;
+        _toast('You are on the seat. Your mic is live.');
+        _syncAgoraRole();
+      } else {
+        _toast('Request sent. Waiting for the host');
+        _startPolling();
+      }
+    } catch (e) {
+      _toast(_friendly(e));
+    }
+  }
+
+  Future<void> _onToggleMic() async {
+    final seat = _room.mySeat;
+    if (seat == null) {
+      _toast('Take a seat first');
+      return;
+    }
+    final wantOn = !seat.micOn;
+    if (wantOn && !await PermissionPrompts.forVoice(context)) return;
+    if (!mounted) return;
+    try {
+      await RoomApi.instance.post('/v1/rooms/$_roomId/seats/me', body: {'mic': wantOn});
+    } catch (e) {
+      _toast(_friendly(e));
+      return;
+    }
+    _room.toggleMic();
+  }
+
+  void _sendChat(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _chat.add(_ChatLine(level: _room.me.level, name: 'You', text: text));
+    });
+    _chatCtrl.clear();
+  }
+
+  Future<void> _toggleFollow() async {
+    final pid = widget.room.hostPublicId;
+    if (pid == null || pid == 0) {
+      _toast('This host cannot be followed yet');
+      return;
+    }
+    final next = !_following;
+    setState(() => _following = next);
+    try {
+      await RoomApi.instance.setFollowing(pid, next);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _following = !next);
+      _toast(_friendly(e));
+    }
   }
 
   void _toast(String message) {
@@ -98,71 +399,42 @@ class _RoomScreenState extends State<RoomScreen> {
       );
   }
 
-  void _togglePk() {
-    setState(() {
-      _pk.reset();
-      _pkVisible = !_pkVisible;
-    });
-  }
-
-  void _sendChat(String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return;
-    setState(() {
-      _chat.add(_ChatLine(level: _room.me.level, name: 'You', text: text));
-    });
-    _chatCtrl.clear();
-  }
-
-  void _openMore() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF241046),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(14),
-              child: Text(
-                'Demo controls',
-                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800),
-              ),
-            ),
-            for (final r in RoomRole.values)
-              ListTile(
-                leading: const Icon(Icons.person_rounded, color: Colors.white70),
-                title: Text('Act as ${r.label}', style: const TextStyle(color: Colors.white)),
-                trailing: _room.myRole == r
-                    ? const Icon(Icons.check_rounded, color: AppColors.gold)
-                    : null,
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  _room.setMyRole(r);
-                },
-              ),
-            ListTile(
-              leading: const Icon(Icons.flash_on_rounded, color: Colors.white70),
-              title: Text(
-                _pkVisible ? 'Close PK battle' : 'PK battle',
-                style: const TextStyle(color: Colors.white),
-              ),
-              onTap: () {
-                Navigator.of(ctx).pop();
-                _togglePk();
-              },
-            ),
-          ],
-        ),
-      ),
+  void _giftTo(int receiverId, String receiverName) {
+    if (!_serverJoined) return;
+    GiftPickerSheet.show(
+      context,
+      controller: _room,
+      receiver: _userForGift(receiverId, receiverName),
+      roomId: _roomId,
     );
   }
 
+  RoomUser _userForGift(int receiverId, String name) =>
+      _room.participants.firstWhere((p) => p.id == '$receiverId',
+          orElse: () => RoomUser(id: '$receiverId', name: name));
+
+  // ---- build --------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
+    if (!_serverJoined && _error.isNotEmpty) {
+      return _errorScreen();
+    }
+    if (!_serverJoined) {
+      return const Scaffold(
+        backgroundColor: AppColors.deepPurple,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.gold),
+              SizedBox(height: 16),
+              Text('Joining the live room...', style: TextStyle(color: Colors.white70)),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: AppColors.deepPurple,
       body: Container(
@@ -182,24 +454,19 @@ class _RoomScreenState extends State<RoomScreen> {
                   AnimatedBuilder(animation: _room, builder: (context, _) => _topArea()),
                   Expanded(
                     child: AnimatedBuilder(
-                      animation: Listenable.merge([_room, _pk]),
+                      animation: _room,
                       builder: (context, _) => SingleChildScrollView(
                         padding: const EdgeInsets.only(top: 6, bottom: 12),
                         child: Column(
                           children: [
-                            if (_pkVisible) ...[
-                              PkBattleOverlay(
-                                controller: _pk,
-                                isHost: _room.isHost,
-                                showDemoControls: true,
-                                onClose: _togglePk,
-                              ),
-                              const SizedBox(height: 16),
-                            ],
                             PartySeatBoard(
                               controller: _room,
-                              onSeatTap: (seat) =>
-                                  SeatActionSheet.show(context, controller: _room, seat: seat),
+                              onSeatTap: (seat) => SeatActionSheet.show(
+                                context,
+                                controller: _room,
+                                seat: seat,
+                                roomId: _roomId,
+                              ),
                               onVipTap: () => _toast('VIP seats will open soon'),
                             ),
                             const SizedBox(height: 12),
@@ -220,9 +487,44 @@ class _RoomScreenState extends State<RoomScreen> {
     );
   }
 
-  // ---- top area ---------------------------------------------------------------
+  Widget _errorScreen() {
+    return Scaffold(
+      backgroundColor: AppColors.deepPurple,
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(Icons.error_outline_rounded, color: Colors.orangeAccent, size: 48),
+            const SizedBox(height: 12),
+            Text(_error, textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.orangeAccent)),
+            const SizedBox(height: 20),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.gold, foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14)),
+              onPressed: _enter,
+              child: const Text('Try again'),
+            ),
+            TextButton(
+              onPressed: () {
+                _ending = true;
+                _teardown();
+                Navigator.of(context).pop();
+              },
+              child: const Text('Back', style: TextStyle(color: Colors.white70)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _topArea() {
+    final host = _room.roomHost;
+    final name = host?.name ?? widget.room.hostName;
     return Column(
       children: [
         Padding(
@@ -235,7 +537,7 @@ class _RoomScreenState extends State<RoomScreen> {
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
-                    child: _hostCard(),
+                    child: _hostCard(name, host?.avatarUrl),
                   ),
                 ),
               ),
@@ -244,8 +546,8 @@ class _RoomScreenState extends State<RoomScreen> {
               const SizedBox(width: 8),
               _RoundIcon(
                 icon: Icons.close_rounded,
-                tooltip: 'Leave room',
-                onTap: () => Navigator.of(context).maybePop(),
+                tooltip: _room.isHost ? 'End live' : 'Leave room',
+                onTap: _onBack,
               ),
             ],
           ),
@@ -254,9 +556,7 @@ class _RoomScreenState extends State<RoomScreen> {
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
           child: Row(
             children: [
-              _pill('💎', '0'),
-              const SizedBox(width: 8),
-              _pill(null, '0'),
+              _pill('💎', '${_room.coins}'),
               const Spacer(),
               if (_room.canModerate)
                 _RoundIcon(
@@ -269,13 +569,21 @@ class _RoomScreenState extends State<RoomScreen> {
             ],
           ),
         ),
+        if (_error.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+            child: Text(
+              _error,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+            ),
+          ),
       ],
     );
   }
 
-  Widget _hostCard() {
-    final host = _room.roomHost;
-    final name = host?.name ?? widget.title;
+  Widget _hostCard(String name, String? avatarUrl) {
     return Container(
       padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
       decoration: BoxDecoration(
@@ -286,7 +594,7 @@ class _RoomScreenState extends State<RoomScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AvatarCircle(name: name, url: host?.avatarUrl, size: 40),
+          AvatarCircle(name: name, url: avatarUrl, size: 40),
           const SizedBox(width: 8),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 110),
@@ -301,16 +609,18 @@ class _RoomScreenState extends State<RoomScreen> {
                   style: const TextStyle(
                       color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
                 ),
-                const Text(
-                  'ID 10293847',
-                  style: TextStyle(color: Colors.white60, fontSize: 11),
+                Text(
+                  widget.room.hostPublicId == null
+                      ? 'LIVE'
+                      : 'ID ${widget.room.hostPublicId}',
+                  style: const TextStyle(color: Colors.white60, fontSize: 11),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 8),
           GestureDetector(
-            onTap: () => setState(() => _following = !_following),
+            onTap: _toggleFollow,
             child: Container(
               width: 34,
               height: 34,
@@ -331,30 +641,27 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   Widget _viewerChip() {
-    return GestureDetector(
-      onTap: () => _toast('The viewer list comes with the server'),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: .35),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.people_alt_rounded, color: Colors.white70, size: 16),
-            const SizedBox(width: 4),
-            Text(
-              '${_room.participants.length}',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: .35),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.people_alt_rounded, color: Colors.white70, size: 16),
+          const SizedBox(width: 4),
+          Text(
+            '${_room.participants.length}',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _pill(String? emoji, String value) {
+  Widget _pill(String emoji, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -365,12 +672,9 @@ class _RoomScreenState extends State<RoomScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (emoji != null) ...[
-            Text(emoji, style: const TextStyle(fontSize: 14)),
-            const SizedBox(width: 6),
-          ],
-          Text(value,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          Text(emoji, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 6),
+          Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
         ],
       ),
     );
@@ -391,8 +695,6 @@ class _RoomScreenState extends State<RoomScreen> {
       ),
     );
   }
-
-  // ---- chat and join call -----------------------------------------------------
 
   Widget _chatAndActions() {
     return SizedBox(
@@ -457,11 +759,22 @@ class _RoomScreenState extends State<RoomScreen> {
           ),
           if (seat.index != 0) ...[
             const SizedBox(height: 8),
-            _miniAction(
-              icon: Icons.logout_rounded,
-              label: 'Leave',
-              color: Colors.redAccent,
-              onTap: _room.leaveSeat,
+            FilterChip(
+              label: SizedBox(
+                width: 56,
+                child: Center(
+                  child: Text('Leave',
+                      style: TextStyle(
+                          color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              selected: false,
+              onSelected: (_) async {
+                try {
+                  await RoomApi.instance.leaveSeat(_roomId);
+                } catch (_) {}
+                await _pull();
+              },
             ),
           ],
         ],
@@ -471,7 +784,12 @@ class _RoomScreenState extends State<RoomScreen> {
       return _joinCallBox(
         icon: Icons.hourglass_top_rounded,
         label: 'Requested',
-        onTap: _room.cancelRequest,
+        onTap: () async {
+          try {
+            await RoomApi.instance.cancelSeatRequest(_roomId);
+          } catch (_) {}
+          await _pull();
+        },
       );
     }
     return _joinCallBox(icon: Icons.add_rounded, label: 'Join Call', onTap: _joinSeat);
@@ -541,8 +859,6 @@ class _RoomScreenState extends State<RoomScreen> {
     );
   }
 
-  // ---- bottom bar -------------------------------------------------------------
-
   Widget _bottomBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -572,60 +888,32 @@ class _RoomScreenState extends State<RoomScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            _RoundIcon(
-              icon: _speakerOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-              color: _speakerOn ? AppColors.gold : Colors.white54,
-              tooltip: 'Room sound',
-              onTap: () => setState(() => _speakerOn = !_speakerOn),
+            FilterChip(
+              label: Icon(
+                _speakerOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                color: _speakerOn ? AppColors.gold : Colors.white54,
+                size: 22,
+              ),
+              selected: false,
+              onSelected: (_) => _toggleSpeaker(),
             ),
             const SizedBox(width: 8),
             _RoundIcon(
               icon: Icons.card_giftcard_rounded,
               color: AppColors.pink,
               tooltip: 'Send gift to host',
-              onTap: _giftToHost,
+              onTap: () => _giftTo(_hostUserId, widget.room.hostName),
             ),
             const SizedBox(width: 8),
             _RoundIcon(
               icon: Icons.more_horiz_rounded,
               tooltip: 'More',
-              onTap: _openMore,
+              onTap: () {},
             ),
           ],
         ),
       ),
     );
-  }
-
-  // ---- actions ----------------------------------------------------------------
-
-  /// Asks for the microphone before a seat is requested (voice seats need it).
-  Future<void> _joinSeat() async {
-    final i = _room.seats.indexWhere((s) => s.isEmpty);
-    if (i == -1) {
-      _toast('No free seats');
-      return;
-    }
-    if (!await PermissionPrompts.forVoice(context)) return;
-    if (!mounted) return;
-    _room.requestToJoin(i);
-  }
-
-  /// Asks for the microphone only when the user is switching it ON.
-  Future<void> _onToggleMic() async {
-    final seat = _room.mySeat;
-    if (seat != null && !seat.micOn && !await PermissionPrompts.forVoice(context)) return;
-    if (!mounted) return;
-    _room.toggleMic();
-  }
-
-  void _giftToHost() {
-    final host = _room.roomHost;
-    if (host == null || host.id == RoomController.meId) {
-      _toast('You are the host');
-      return;
-    }
-    GiftPickerSheet.show(context, controller: _room, receiver: host);
   }
 }
 

@@ -43,13 +43,44 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _openRoom(LiveRoom room) {
+  Future<void> _openRoom(LiveRoom room) async {
     // Entering a room never needs a permission; ask for the mic in the background so voice seats work.
     PermissionPrompts.softAsk(PermissionService.voiceSet);
+    String? password;
+    if (room.passwordRequired) {
+      password = await _askRoomPassword(room.hostName);
+      if (password == null) return;
+    }
+    if (!mounted) return;
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => RoomScreen(title: room.hostName)),
+      MaterialPageRoute<void>(
+          builder: (_) => RoomScreen(room: room, joinPassword: password)),
     );
   }
+
+  Future<String?> _askRoomPassword(String hostName) => showDialog<String>(
+        context: context,
+        builder: (ctx) {
+          final ctrl = TextEditingController();
+          return AlertDialog(
+            title: Text('$hostName has a room password'),
+            content: TextField(
+              controller: ctrl,
+              autofocus: true,
+              obscureText: true,
+              maxLength: 16,
+              decoration: const InputDecoration(hintText: 'Password (4-16 characters)'),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child: const Text('Join'),
+              ),
+            ],
+          );
+        },
+      );
 
   Future<void> _goLive() async {
     final mode = await showModalBottomSheet<LiveMode>(
