@@ -5,7 +5,7 @@ class ApiConfig {
 
   /// Mock data is now off: Discover / New / Follow fetch real live rooms
   /// from `GET /v1/rooms?tab=...` on the Go backend.
-  static const bool useMockData = false;
+  static const bool useMockData = true;
 
   static const Duration timeout = Duration(seconds: 15);
 }

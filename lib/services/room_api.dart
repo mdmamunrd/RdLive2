@@ -74,8 +74,22 @@ class RoomApi {
     return _handle(res);
   }
 
+  /// Demo rooms shown while useMockData is on (the app worked this way before
+  /// the backend is connected).
+  List<LiveRoom> _demoRooms() {
+    final viewer = 80 + DateTime.now().minute % 40;
+    return [
+      const LiveRoom(id: '9001', hostName: 'Rumana 🎀', countryCode: 'BD', badge: 'New Star', viewerCount: 126, seatCount: 12, agoraChannel: 'room_demo_1'),
+      const LiveRoom(id: '9002', hostName: 'Rakib 🔥', countryCode: 'BD', badge: 'Top Party', viewerCount: 92, seatCount: 12, agoraChannel: 'room_demo_2'),
+      LiveRoom(id: '9003', hostName: 'Priya ✨', countryCode: 'IN', viewerCount: viewer, seatCount: 12, agoraChannel: 'room_demo_3'),
+      const LiveRoom(id: '9004', hostName: 'Hasan 🎤', countryCode: 'BD', viewerCount: 54, seatCount: 12, agoraChannel: 'room_demo_4'),
+      const LiveRoom(id: '9005', hostName: 'Nadia 💖', countryCode: 'BD', badge: 'Rising', viewerCount: 210, seatCount: 12, agoraChannel: 'room_demo_5'),
+    ];
+  }
+
   /// Home feed tabs. Mirrors `GET /v1/rooms?tab=discover|new|follow`.
   Future<List<LiveRoom>> fetchRooms(RoomTab tab) async {
+    if (ApiConfig.useMockData) return _demoRooms();
     final name = tab == RoomTab.newest ? 'new' : tab.name;
     final data = await get('/v1/rooms?tab=$name&limit=60');
     final list = (data['rooms'] as List).cast<Map<String, dynamic>>();
@@ -88,48 +102,72 @@ class RoomApi {
     required int seatCount,
     required String mediaMode,
     String? title,
-  }) =>
-      post('/v1/rooms', body: {
-        if (title != null && title.isNotEmpty) 'title': title,
-        'seat_count': seatCount,
-        'media_mode': mediaMode,
-      });
+  }) async {
+    if (ApiConfig.useMockData) {
+      return {
+        'room_id': DateTime.now().millisecondsSinceEpoch % 100000,
+      };
+    }
+    return post('/v1/rooms', body: {
+      if (title != null && title.isNotEmpty) 'title': title,
+      'seat_count': seatCount,
+      'media_mode': mediaMode,
+    });
+  }
 
   /// POST /v1/rooms/{id}/join — returns the viewer's role in the room.
   Future<String> joinRoom(int roomId, {String? password}) async {
+    if (ApiConfig.useMockData) return 'audience';
     final data = await post('/v1/rooms/$roomId/join', body: {
       if (password != null && password.isNotEmpty) 'password': password,
     });
     return data['role'] as String? ?? 'audience';
   }
 
-  Future<void> leaveRoom(int roomId) => post('/v1/rooms/$roomId/leave');
+  Future<void> leaveRoom(int roomId) async {
+    if (ApiConfig.useMockData) return;
+    await post('/v1/rooms/$roomId/leave');
+  }
 
-  Future<void> endRoom(int roomId) => post('/v1/rooms/$roomId/end');
+  Future<void> endRoom(int roomId) async {
+    if (ApiConfig.useMockData) return;
+    await post('/v1/rooms/$roomId/end');
+  }
 
   /// GET /v1/rooms/{id} — seats, members, room info (after joining).
-  Future<Map<String, dynamic>> roomSnapshot(int roomId) =>
-      get('/v1/rooms/$roomId');
+  Future<Map<String, dynamic>> roomSnapshot(int roomId) async {
+    if (ApiConfig.useMockData) return const {};
+    return get('/v1/rooms/$roomId');
+  }
 
   /// POST /v1/rooms/{id}/seats/request — {result: "seated"|"pending", seat_index}
-  Future<Map<String, dynamic>> requestSeat(int roomId, {int? seatIndex}) =>
-      post('/v1/rooms/$roomId/seats/request', body: {
-        if (seatIndex != null) 'seat_index': seatIndex,
-      });
+  Future<Map<String, dynamic>> requestSeat(int roomId, {int? seatIndex}) async {
+    if (ApiConfig.useMockData) return {'result': 'seated'};
+    return post('/v1/rooms/$roomId/seats/request', body: {
+      if (seatIndex != null) 'seat_index': seatIndex,
+    });
+  }
 
-  Future<void> cancelSeatRequest(int roomId) =>
-      delete('/v1/rooms/$roomId/seats/request');
+  Future<void> cancelSeatRequest(int roomId) async {
+    if (ApiConfig.useMockData) return;
+    await delete('/v1/rooms/$roomId/seats/request');
+  }
 
-  Future<void> leaveSeat(int roomId) => post('/v1/rooms/$roomId/seats/leave');
+  Future<void> leaveSeat(int roomId) async {
+    if (ApiConfig.useMockData) return;
+    await post('/v1/rooms/$roomId/seats/leave');
+  }
 
   /// GET /v1/wallet — {"coins": n, "diamonds": n}
   Future<int> myCoins() async {
+    if (ApiConfig.useMockData) return 5000;
     final data = await get('/v1/wallet');
     return (data['coins'] as num?)?.toInt() ?? 0;
   }
 
   /// GET /v1/gifts — the real catalogue.
   Future<List<GiftOption>> fetchGifts() async {
+    if (ApiConfig.useMockData) return kMockGifts;
     final data = await get('/v1/gifts');
     final list = (data['gifts'] as List).cast<Map<String, dynamic>>();
     return [
@@ -149,11 +187,12 @@ class RoomApi {
     int? roomId,
     required int giftId,
     int quantity = 1,
-  }) {
+  }) async {
+    if (ApiConfig.useMockData) return;
     final rnd = Random.secure();
     final key =
         'rd${DateTime.now().millisecondsSinceEpoch}${rnd.nextInt(1 << 32)}';
-    return post(
+    await post(
       '/v1/gifts/send',
       body: {
         'receiver_id': receiverId,
@@ -167,6 +206,7 @@ class RoomApi {
 
   /// POST/DELETE /v1/users/{publicID}/follow
   Future<void> setFollowing(int publicId, bool follow) async {
+    if (ApiConfig.useMockData) return;
     if (follow) {
       await post('/v1/users/$publicId/follow');
     } else {
