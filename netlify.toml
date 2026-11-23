@@ -1,0 +1,21 @@
+# Deploys the RdLive Go API as a single Netlify function.
+# Site -> Configuration -> Environment variables (scope: Functions) needs:
+#   DATABASE_URL, JWT_SECRET (min 32 chars), FIREBASE_PROJECT_ID, PUBLIC_BASE_URL
+
+[build]
+  publish = "netlify/public"
+
+[functions]
+  directory = "backend_go/netlify/functions"
+
+[[redirects]]
+  from = "/v1/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/healthz"
+  to = "/.netlify/functions/api/healthz"
+  status = 200
+  force = true
