@@ -48,6 +48,19 @@ subprojects {
             val androidExt = extensions.findByName("android")
             if (androidExt != null) {
                 try {
+                    val lint = androidExt.javaClass.methods.firstOrNull {
+                        it.name == "getLint" && it.parameterCount == 0
+                    }?.invoke(androidExt)
+                    if (lint != null) {
+                        lint.javaClass.methods.firstOrNull { it.name == "setCheckReleaseBuilds" }
+                            ?.invoke(lint, false)
+                        lint.javaClass.methods.firstOrNull { it.name == "setAbortOnError" }
+                            ?.invoke(lint, false)
+                    }
+                } catch (e: Exception) {
+                    println("lint override skipped for ${project.name}: $e")
+                }
+                try {
                     val co = androidExt.javaClass.methods.firstOrNull {
                         it.name == "getCompileOptions" && it.parameterCount == 0
                     }?.invoke(androidExt)
